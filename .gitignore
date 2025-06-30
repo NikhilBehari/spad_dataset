@@ -1,6 +1,7 @@
 # Example log files
 logs/
 outputs/
+librealsense/
 *.pkl
 
 # Mac
