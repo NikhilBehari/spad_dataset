@@ -2,6 +2,7 @@
 logs/
 outputs/
 librealsense/
+out_data_captured/
 *.pkl
 
 # Mac

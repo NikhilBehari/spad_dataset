@@ -25,8 +25,8 @@ GANTRY_AXES_KWARGS = {}
 SENSOR_CONFIG = "TMF8828Config"
 
 # Default sample values (will be overridden by 't' for test mode)
-DEFAULT_X_SAMPLES = 100
-DEFAULT_Y_SAMPLES = 100
+DEFAULT_X_SAMPLES = 10
+DEFAULT_Y_SAMPLES = 10
 
 
 # Map specific descriptions to spad + gantry port 
@@ -42,6 +42,8 @@ for port in serial.tools.list_ports.comports():
 print("GANTRY PORT: ", GANTRY_PORT, "    SPAD PORT: ", SENSOR_PORT)
 
 NOW = datetime.now()
+LOG_BASE_DIR = Path("out_data_captured")
+DAILY_LOG_DIR_NAME = NOW.strftime("%Y-%m-%d") 
 
 def setup(
     manager: Manager,
@@ -74,10 +76,22 @@ def setup(
     )
     manager.add(gantry=gantry, controller=gantry_controller)
 
-    output_pkl = logdir / f"{object}_{NOW.strftime('%Y%m%d_%H%M%S')}.pkl"
-    assert not output_pkl.exists(), f"Output file {output_pkl} already exists"
-    pkl_writer = PklHandler(output_pkl)
+    # generate unique filename with _N suffix if needed
+    base_filename = f"{object}_{NOW.strftime('%Y%m%d')}"
+    suffix = 0
+    final_output_pkl_path = None
+    while True:
+        suffix_str = "" if suffix == 0 else f"_{suffix}"
+        potential_filename = f"{base_filename}{suffix_str}.pkl"
+        potential_path = logdir / potential_filename
+        if not potential_path.exists():
+            final_output_pkl_path = potential_path
+            break
+        suffix += 1
+
+    pkl_writer = PklHandler(final_output_pkl_path)
     manager.add(writer=pkl_writer)
+    manager.add(final_output_pkl_path_for_print=final_output_pkl_path)
 
     pkl_writer.append({
         "metadata": {
@@ -132,7 +146,7 @@ def spad_gantry_capture_v2(
     dashboard: SPADDashboardConfig,
     gantry: StepperMotorSystem,
     object: str,
-    logdir: Path = Path("logs") / NOW.strftime("%Y-%m-%d") / NOW.strftime("%H-%M-%S"),
+    logdir: Path = LOG_BASE_DIR / DAILY_LOG_DIR_NAME,
 ):
     _setup = partial(
         setup,
@@ -151,11 +165,15 @@ def spad_gantry_capture_v2(
         except KeyboardInterrupt:
             cleanup(manager.components["gantry"])
         finally:
-            final_pkl_path = logdir / f"{object}_{NOW.strftime('%Y%m%d_%H%M%S')}.pkl"
-            print(
-                f"\033[1;32mPKL file saved to "
-                f"{final_pkl_path.resolve()}\033[0m"
-            )
+            # Retrieve the actual path that was used for saving from the manager
+            final_pkl_path_for_print = manager.components.get("final_output_pkl_path_for_print")
+            if final_pkl_path_for_print: # Check if the path was successfully stored
+                print(
+                    f"\033[1;32mPKL file saved to "
+                    f"{final_pkl_path_for_print.resolve()}\033[0m"
+                )
+            else:
+                get_logger().error("Could not retrieve final PKL path for printing.")
 
 
 def main():
