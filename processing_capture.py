@@ -3,6 +3,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 import cv2
+import json
+from datetime import datetime
+from ArucoMarkers import ArucoMarkerDetector
 
 
 
@@ -165,61 +168,49 @@ class DataManager:
         plt.show()
 
 
+def load_aruco_parameters(config_filename):
+    """Load saved ArUco parameters from JSON file"""
+    try:
+        with open(config_filename, 'r') as f:
+            config = json.load(f)
 
-class ArucoMarkerDetector:
-    """
-    This class is used to detect aruco markers in the image.
-    """
+        # Create detector parameters from saved config
+        params = cv2.aruco.DetectorParameters()
+        param_data = config['parameters']
 
-    def __init__(self,
-                 dictionary_id: int = cv2.aruco.DICT_ARUCO_ORIGINAL,
-                 parameters: cv2.aruco.DetectorParameters = None):
+        params.adaptiveThreshWinSizeMin = param_data['adaptiveThreshWinSizeMin']
+        params.adaptiveThreshWinSizeMax = param_data['adaptiveThreshWinSizeMax']
+        params.adaptiveThreshWinSizeStep = param_data['adaptiveThreshWinSizeStep']
+        params.adaptiveThreshConstant = param_data['adaptiveThreshConstant']
+        params.minMarkerPerimeterRate = param_data['minMarkerPerimeterRate']
+        params.maxMarkerPerimeterRate = param_data['maxMarkerPerimeterRate']
+        params.polygonalApproxAccuracyRate = param_data['polygonalApproxAccuracyRate']
+        params.cornerRefinementMethod = param_data['cornerRefinementMethod']
+        params.cornerRefinementWinSize = param_data['cornerRefinementWinSize']
+        params.cornerRefinementMaxIterations = param_data['cornerRefinementMaxIterations']
+        params.errorCorrectionRate = param_data['errorCorrectionRate']
 
-        # Setup the detector - Updated for newer OpenCV versions
-        try:
-            # Try newer OpenCV API first (4.7+)
-            self.aruco_dict = cv2.aruco.getPredefinedDictionary(dictionary_id)
-            self.parameters = parameters or cv2.aruco.DetectorParameters()
-            self.detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.parameters)
-        except AttributeError:
-            # Fall back to older OpenCV API (4.6 and earlier)
-            self.aruco_dict = cv2.aruco.Dictionary_get(dictionary_id)
-            self.parameters = parameters or cv2.aruco.DetectorParameters_create()
-            self.detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.parameters)
+        print(f"✅ Loaded ArUco parameters from: {config_filename}")
+        print(f"📋 Config: {config['best_config_name']}")
+        print(f"🎯 Expected performance: {config['performance']['markers_detected']} markers per capture")
 
-        self.ground_plane_ids = {i for i in range(200, 204)}
-        self.object_id = 204
-        self.sensor_id = 205
-        self.marker_ids = {*self.ground_plane_ids, self.object_id, self.sensor_id}
+        return params, config
 
-    def detect(self, image):
-        """
-        Detects aruco markers in an image
-
-        Args:
-            image (numpy.ndarray): The image to detect aruco markers in.
-
-        Returns:
-            tuple: (corners, ids, rejected) from ArUco detection
-        """
-        # Convert to grayscale if needed
-        if len(image.shape) == 3:
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        else:
-            gray = image
-
-        # Detect markers
-        corners, ids, rejected = self.detector.detectMarkers(gray)
-        return corners, ids, rejected
-
+    except FileNotFoundError:
+        print(f"❌ Configuration file not found: {config_filename}")
+        print("💡 Run parameter optimization first to generate the config file")
+        return None, None
+    except Exception as e:
+        print(f"❌ Error loading parameters: {e}")
+        return None, None
 
 
 class Processor:
     """Manages all processing"""
 
-    def __init__(self, capture):
+    def __init__(self, capture, custom_detector=None):
         self.data = capture
-        self.aruco_detector = ArucoMarkerDetector()
+        self.aruco_detector = custom_detector or ArucoMarkerDetector()
 
     def get_grayscale(self):
         """Convert RGB image to grayscale"""
@@ -315,10 +306,21 @@ class Processor:
         cv2.waitKey(0)
         cv2.destroyAllWindows()
 
-def loop_through_captures(data):
-    """Loop through all captures and return the maximum number of markers detected"""
+def loop_through_captures(data, custom_detector=None):
+    """Loop through all captures and return the maximum number of markers detected
+
+    Args:
+        data: DataManager instance with capture data
+        custom_detector: Optional ArucoMarkerDetector with optimized parameters
+    """
     num_captures = len(data.data_entries)
-    print(f"\nProcessing {num_captures} captures...")
+
+    if custom_detector:
+        print(f"\n🎯 Using optimized ArUco detector parameters")
+    else:
+        print(f"\n📋 Using default ArUco detector parameters")
+
+    print(f"Processing {num_captures} captures...")
 
     max_markers = 0
     all_marker_counts = []
@@ -335,8 +337,8 @@ def loop_through_captures(data):
             # data.display_capture_data(selected_capture)
             # data.plot_capture_data(selected_capture)
 
-            # Process ArUco detection
-            processed = Processor(selected_capture)
+            # Process ArUco detection with custom detector if provided
+            processed = Processor(selected_capture, custom_detector)
 
             # Get marker count for this capture
             corners, ids, rejected = processed.detect_aruco()
@@ -360,134 +362,6 @@ def loop_through_captures(data):
 
     return max_markers
 
-def test_dictionaries(data):
-    """Used to determine which dictionaries the Aruco Markers are from"""
-
-
-    # Get a sample capture to test with
-    if not data.data_entries:
-        print("No capture data available for testing")
-        return
-
-    # Use the first capture for testing
-    test_capture = data.data_entries[0]
-    processor = Processor(test_capture)
-    test_image = processor.get_grayscale()
-
-    if test_image is None:
-        print("Could not get test image")
-        return
-
-    # List of all available ArUco dictionaries
-    dictionaries = [
-        ("DICT_4X4_50", cv2.aruco.DICT_4X4_50),
-        ("DICT_4X4_100", cv2.aruco.DICT_4X4_100),
-        ("DICT_4X4_250", cv2.aruco.DICT_4X4_250),
-        ("DICT_4X4_1000", cv2.aruco.DICT_4X4_1000),
-        ("DICT_5X5_50", cv2.aruco.DICT_5X5_50),
-        ("DICT_5X5_100", cv2.aruco.DICT_5X5_100),
-        ("DICT_5X5_250", cv2.aruco.DICT_5X5_250),
-        ("DICT_5X5_1000", cv2.aruco.DICT_5X5_1000),
-        ("DICT_6X6_50", cv2.aruco.DICT_6X6_50),
-        ("DICT_6X6_100", cv2.aruco.DICT_6X6_100),
-        ("DICT_6X6_250", cv2.aruco.DICT_6X6_250),
-        ("DICT_6X6_1000", cv2.aruco.DICT_6X6_1000),
-        ("DICT_7X7_50", cv2.aruco.DICT_7X7_50),
-        ("DICT_7X7_100", cv2.aruco.DICT_7X7_100),
-        ("DICT_7X7_250", cv2.aruco.DICT_7X7_250),
-        ("DICT_7X7_1000", cv2.aruco.DICT_7X7_1000),
-        ("DICT_ARUCO_ORIGINAL", cv2.aruco.DICT_ARUCO_ORIGINAL),
-        ("DICT_APRILTAG_16h5", cv2.aruco.DICT_APRILTAG_16h5),
-        ("DICT_APRILTAG_25h9", cv2.aruco.DICT_APRILTAG_25h9),
-        ("DICT_APRILTAG_36h10", cv2.aruco.DICT_APRILTAG_36h10),
-        ("DICT_APRILTAG_36h11", cv2.aruco.DICT_APRILTAG_36h11),
-    ]
-
-    print(f"\n{'='*80}")
-    print("TESTING ALL ARUCO DICTIONARIES")
-    print(f"{'='*80}")
-    print(f"Testing with capture 0, image shape: {test_image.shape}")
-
-    results = []
-    best_results = []
-
-    for dict_name, dict_id in dictionaries:
-        try:
-            # Create detector with this dictionary
-            detector = ArucoMarkerDetector(dict_id)
-            corners, ids, rejected = detector.detect(test_image)
-
-            num_markers = len(corners) if corners is not None else 0
-            num_rejected = len(rejected) if rejected is not None else 0
-
-            result = {
-                'name': dict_name,
-                'markers': num_markers,
-                'rejected': num_rejected,
-                'ids': ids.flatten().tolist() if ids is not None else [],
-                'dict_id': dict_id
-            }
-            results.append(result)
-
-            # Print results
-            status = "✅" if num_markers > 0 else "❌"
-            print(f"{status} {dict_name:<25} | {num_markers:2d} markers | {num_rejected:2d} rejected | IDs: {result['ids']}")
-
-            # Track best results
-            if num_markers > 0:
-                best_results.append(result)
-
-        except Exception as e:
-            print(f"❌ {dict_name:<25} | ERROR: {e}")
-
-    print(f"\n{'='*80}")
-    print("SUMMARY OF BEST RESULTS")
-    print(f"{'='*80}")
-
-    if best_results:
-        # Sort by number of markers detected (descending)
-        best_results.sort(key=lambda x: x['markers'], reverse=True)
-
-        print(f"Found {len(best_results)} dictionaries that detected markers:")
-        for i, result in enumerate(best_results, 1):
-            print(f"{i}. {result['name']}: {result['markers']} markers (IDs: {result['ids']})")
-
-        # Test the best dictionary on all captures
-        best_dict = best_results[0]
-        print(f"\n{'='*80}")
-        print(f"TESTING BEST DICTIONARY ({best_dict['name']}) ON ALL CAPTURES")
-        print(f"{'='*80}")
-
-        detector = ArucoMarkerDetector(best_dict['dict_id'])
-
-        for i, capture in enumerate(data.data_entries):
-            processor = Processor(capture)
-            image = processor.get_grayscale()
-            if image is not None:
-                corners, ids, rejected = detector.detect(image)
-                num_markers = len(corners) if corners is not None else 0
-                marker_ids = ids.flatten().tolist() if ids is not None else []
-                print(f"Capture {i}: {num_markers} markers (IDs: {marker_ids})")
-
-        # Show combined results
-        print(f"\n{'='*80}")
-        print("RECOMMENDATION")
-        print(f"{'='*80}")
-        print(f"Best dictionary: {best_dict['name']}")
-        print(f"To use this dictionary, change the ArucoMarkerDetector initialization to:")
-        print(f"ArucoMarkerDetector(cv2.aruco.{best_dict['name']})")
-
-    else:
-        print("❌ No dictionaries detected any markers!")
-        print("This could mean:")
-        print("1. No ArUco markers are present in the image")
-        print("2. The markers are too small, blurry, or distorted")
-        print("3. The markers are from a custom dictionary not tested")
-
-    print(f"{'='*80}")
-    return best_results
-
-
 # --- Main Execution ---
 if __name__ == "__main__":
 
@@ -495,6 +369,7 @@ if __name__ == "__main__":
     # IMPORTANT: Replace this with the actual path to your .pkl file
     # Example: PKL_PATH = Path("out_data_captured/2025-06-30/my_object_20250630_0.pkl")
     PKL_PATH_INPUT = "test_20250709_1.pkl"
+    #PKL_PATH_INPUT = "test_20250703.pkl"
     PKL_PATH = Path(PKL_PATH_INPUT)
 
 
@@ -506,5 +381,33 @@ if __name__ == "__main__":
         print("No capture data found. Exiting.")
         exit(1)
 
-    #test_dictionaries(data)
-    loop_through_captures(data)
+    # To test dictionaries:
+    #detector = ArucoMarkerDetector();
+    #detector.test_dictionaries(data)
+
+    # Load optimized parameters (automatically uses latest config file)
+    config_filename = 'best_aruco_params_20250710_224754.json'
+
+    # Alternative: manually specify a config file
+    # config_filename = "best_aruco_params_20250103_143022.json"
+    # Alternative: list available configs and choose one
+    # available_configs = list_aruco_configs()
+
+    if config_filename:
+        # Load the saved parameters
+        params, config = load_aruco_parameters(config_filename)
+
+        if params is not None:
+            # Create detector with optimized parameters
+            optimized_detector = ArucoMarkerDetector(cv2.aruco.DICT_ARUCO_ORIGINAL, params)
+            loop_through_captures(data, custom_detector=optimized_detector)
+        else:
+            # Fallback to default parameters
+            print("⚠️  Using default parameters due to loading error")
+            loop_through_captures(data)
+    else:
+        # No config file found, use default parameters
+        print("📋 No saved parameters found, using default detection")
+        loop_through_captures(data)
+
+    # To vary parameters: detector = ArucoMarkerDetector(); detector.vary_parameters(data)

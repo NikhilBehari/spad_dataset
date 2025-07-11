@@ -4,6 +4,7 @@ outputs/
 librealsense/
 out_data_captured/
 *.pkl
+*.json
 
 # Mac
 .DS_Store
