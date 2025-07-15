@@ -212,6 +212,7 @@ class Processor:
         self.data = capture
         self.aruco_detector = custom_detector or ArucoMarkerDetector()
 
+
     def get_grayscale(self):
         """Convert RGB image to grayscale"""
         realsense_data = self.data.get("realsense_data", {})
@@ -245,6 +246,7 @@ class Processor:
         print(f'corners: {len(corners) if corners is not None else 0} detected')
         print(f'ids: {ids}')
         print(f'rejected: {len(rejected) if rejected is not None else 0}')
+        
         return corners, ids, rejected
 
     def draw_aruco(self):
@@ -294,6 +296,33 @@ class Processor:
             print(f'No ArUco markers detected - returning original grayscale image')
             return grayscale
 
+    def read_intrinsics(self, path):
+        """
+        Read the intrinsics from a file
+
+        Args:
+            path (str): The path to the intrinsics file
+
+        Returns:
+            dict: The intrinsics data
+            None if error reading the file
+        """
+        try:
+            with open(path, 'r') as f:
+                intrinsics = json.load(f)
+            print(f"✅ Intrinsics file found: {path}")
+            return intrinsics
+        except FileNotFoundError:
+            print(f"❌ Intrinsics file not found: {path}")
+            return None
+        except json.JSONDecodeError:
+            print(f"❌ Error parsing intrinsics file: {path}")
+            return None
+        except:
+            print(f'Issue reading intrinsics file: {path}')
+            return None
+
+
     @staticmethod
     def show_image(image, window_name="ArUco Detection"):
         """Show the image"""
@@ -307,6 +336,7 @@ class Processor:
         cv2.destroyAllWindows()
 
 def loop_through_captures(data, custom_detector=None):
+
     """Loop through all captures and return the maximum number of markers detected
 
     Args:

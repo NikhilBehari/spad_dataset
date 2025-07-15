@@ -20,6 +20,7 @@ class CameraManager:
         # Start the pipeline
         self.profile = self.pipeline.start(self.config)
 
+
         # Get intrinsics and save to JSON
         self._save_intrinsics_to_json()
 

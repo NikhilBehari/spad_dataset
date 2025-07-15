@@ -11,24 +11,75 @@ class ArucoMarkerDetector:
 
     def __init__(self,
                  dictionary_id: int = cv2.aruco.DICT_ARUCO_ORIGINAL,
-                 parameters: cv2.aruco.DetectorParameters = None):
+                 parameters: cv2.aruco.DetectorParameters = None,
+                 detection_mode: str = 'grid',
+                 ground_marker_size: float = .1,
+                 sensor_marker_size: float = 0.08,
+                 object_marker_size: float = 0.08):
 
-        # Setup the detector - Updated for newer OpenCV versions
-        try:
-            # Try newer OpenCV API first (4.7+)
-            self.aruco_dict = cv2.aruco.getPredefinedDictionary(dictionary_id)
-            self.parameters = parameters or cv2.aruco.DetectorParameters()
-            self.detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.parameters)
-        except AttributeError:
-            # Fall back to older OpenCV API (4.6 and earlier)
-            self.aruco_dict = cv2.aruco.Dictionary_get(dictionary_id)
-            self.parameters = parameters or cv2.aruco.DetectorParameters_create()
-            self.detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.parameters)
+        # Setup the detector
+        self.aruco_dict = cv2.aruco.getPredefinedDictionary(dictionary_id)
+        self.parameters = parameters or cv2.aruco.DetectorParameters()
+        self.detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.parameters)
 
         self.ground_plane_ids = {i for i in range(200, 204)}
         self.object_id = 204
         self.sensor_id = 205
-        self.marker_ids = {*self.ground_plane_ids, self.object_id, self.sensor_id}
+        self.size_map = {id: ground_marker_size for id in self.ground_plane_ids}
+        self.size_map[self.object_id] = object_marker_size
+        self.size_map[self.sensor_id] = sensor_marker_size
+
+        self.detection_mode = detection_mode
+
+        if self.detection_mode == 'grid':
+            self.grid_board = self.build_grid()
+        self.intrinsics = self.read_intrinsics("camera_intrinsics.json")
+
+
+    def read_intrinsics(self, path):
+        """
+        Read the intrinsics from a file
+
+        Args:
+            path (str): The path to the intrinsics file
+
+        Returns:
+            dict: The intrinsics data
+            None if error reading the file
+        """
+        try:
+            with open(path, 'r') as f:
+                intrinsics = json.load(f)
+            print(f"✅ Intrinsics file found: {path}")
+            return intrinsics
+        except FileNotFoundError:
+            print(f"❌ Intrinsics file not found: {path}")
+            return None
+        except json.JSONDecodeError:
+            print(f"❌ Error parsing intrinsics file: {path}")
+            return None
+        except:
+            print(f'Issue reading intrinsics file: {path}')
+            return None
+
+    def build_grid(self):
+        """
+        Builds a grid of aruco markers for the ground plane
+        Ignores potential Z offset of the markers that make the ground plane
+
+        Returns:
+            grid_board (cv2.aruco.GridBoard): The grid board object
+        """
+
+        centers = {201: np.array([ 0.0,   0.0, 0.0]),
+                200: np.array([-1.335, 0.0, 0.0]),
+                202: np.array([-1.335, -1.056, 0.0]),
+                203: np.array([ 0.0,  -1.048, 0.0])}
+
+
+
+
+
 
     def detect(self, image):
         """
@@ -48,7 +99,12 @@ class ArucoMarkerDetector:
 
         # Detect markers
         corners, ids, rejected = self.detector.detectMarkers(gray)
+
+        # refine the detection
+        #corners, ids, rejected = self.detector.refineDetectedMarkers(gray, corners, ids, rejected)
+
         return corners, ids, rejected
+
 
     def vary_parameters(self, data):
         """Used to vary the parameters of the aruco detector to optimize detection"""
