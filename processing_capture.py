@@ -211,7 +211,6 @@ class Processor:
     def __init__(self, capture, custom_detector=None):
         self.data = capture
         self.aruco_detector = custom_detector or ArucoMarkerDetector()
-        self._cached_detection = None  # Cache to avoid redundant detection
         self.grayscale = self.get_grayscale()
 
 
@@ -243,18 +242,15 @@ class Processor:
             print("Error: Could not get grayscale image")
             return None, None, None
 
-        # Use cached result if available
-        if self._cached_detection is None:
-            corners, ids, rejected = self.aruco_detector.detect(self.grayscale)
-            self._cached_detection = (corners, ids, rejected)
-            print(f'corners: {len(corners) if corners is not None else 0} detected')
-            print(f'ids: {ids}')
-            print(f'rejected: {len(rejected) if rejected is not None else 0}')
+        corners, ids, rejected = self.aruco_detector.detect(self.grayscale)
+        print(f'corners: {len(corners) if corners is not None else 0} detected')
+        print(f'ids: {ids}')
+        print(f'rejected: {len(rejected) if rejected is not None else 0}')
 
-        return self._cached_detection
+        return corners, ids, rejected
 
     def build_board(self):
-        pass
+        return self.aruco_detector.build_board()
 
     def draw_aruco(self):
         """Draw ArUco markers in the image with outline and center points"""
@@ -263,7 +259,6 @@ class Processor:
             print("Error: Could not get grayscale image for drawing")
             return None
 
-        # Use cached detection (this won't re-run detection)
         corners, ids, _ = self.detect_aruco()
 
         # Check if any markers were found (corners is a list, not None when empty)
@@ -304,42 +299,42 @@ class Processor:
             print(f'No ArUco markers detected - returning original grayscale image')
             return self.grayscale
 
-    def draw_board(self, board):
+    def get_board_pose(self, corners, ids):
+
+        return self.aruco_detector.board_pose(corners, ids)
+
+    def draw_board(self, board_pose):
         """
-        Draws the ground plane on the rgb image
-
-        Args:
-            board (cv2.aruco.Board): The board to draw
-
-        Returns:
-            image_bgr (np.ndarray): The image with the board drawn on it
+        Draw the board on the rgb image
         """
-
-        if self.grayscale is None:
-            print("Error: Could not get grayscale image for drawing")
-            return None
-
-        # Get the rgb image
-        rgb_image = self.get_rgb()
-
-        # Draw the board
-        image_bgr = cv2.cvtColor(rgb_image, cv2.COLOR_BGR2GRAY)
-        image_bgr = cv2.aruco.drawPlanarBoard(image_bgr, board, 1, (0, 0, 255))
-
-        return image_bgr
+        return cv2.drawFrameAxes(self.get_rgb(), self.aruco_detector.camera_matrix, self.aruco_detector.dist_coeffs, board_pose[1], board_pose[2], 0.1)
 
 
     def read_intrinsics(self, path):
         """
-        Read the intrinsics from a file - delegates to ArucoMarkerDetector
+        Read the intrinsics from a file
 
         Args:
             path (str): The path to the intrinsics file
 
         Returns:
             dict: The intrinsics data
+            None if error reading the file
         """
-        return self.aruco_detector.read_intrinsics(path)
+        try:
+            with open(path, 'r') as f:
+                intrinsics = json.load(f)
+            print(f"✅ Intrinsics file found: {path}")
+            return intrinsics
+        except FileNotFoundError:
+            print(f"❌ Intrinsics file not found: {path}")
+            return None
+        except json.JSONDecodeError:
+            print(f"❌ Error parsing intrinsics file: {path}")
+            return None
+        except:
+            print(f'Issue reading intrinsics file: {path}')
+            return None
 
 
     @staticmethod
@@ -391,6 +386,9 @@ def loop_through_captures(data, custom_detector=None):
 
             # Get marker count for this capture
             corners, ids, rejected = processed.detect_aruco()
+            print(f'{corners=}')
+            print(f'{type(corners)=}')
+            print(f'{type(corners[0])=}')
             num_markers = len(corners) if corners is not None else 0
             all_marker_counts.append(num_markers)
 
@@ -400,8 +398,13 @@ def loop_through_captures(data, custom_detector=None):
 
             #aruco_image = processed.draw_aruco()
             # Show the image with capture index in window name
-            #processed.show_image(aruco_image, f"ArUco Detection - Capture {i}")
-            board_image = processed.draw_board(processed.aruco_detector.grid_board)
+
+            board = processed.build_board()
+            board_pose = processed.get_board_pose(corners, ids)
+            board_image = processed.draw_board(board_pose)
+            print(f'{board_pose=}')
+
+            processed.show_image(board_image, f"ArUco Detection - Capture {i}")
 
             print(f"Capture {i} processed ({num_markers} markers). Press any key to continue to next capture...")
 
