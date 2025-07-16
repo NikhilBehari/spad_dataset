@@ -32,7 +32,7 @@ class ArucoMarkerDetector:
         self.detection_mode = detection_mode
 
         if self.detection_mode == 'grid':
-            self.grid_board = self.build_grid()
+            self.grid_board = self.build_board()
         self.intrinsics = self.read_intrinsics("camera_intrinsics.json")
 
 
@@ -62,23 +62,57 @@ class ArucoMarkerDetector:
             print(f'Issue reading intrinsics file: {path}')
             return None
 
-    def build_grid(self):
+
+    def build_board(self):
         """
         Builds a grid of aruco markers for the ground plane
         Ignores potential Z offset of the markers that make the ground plane
+        Top left is (0,0,0):
+            pos x: goes right (along ground plane)
+            pos y: goes up (along ground plane)
+            pos z: out of the ground plane
 
         Returns:
             grid_board (cv2.aruco.GridBoard): The grid board object
         """
 
-        centers = {201: np.array([ 0.0,   0.0, 0.0]),
-                200: np.array([-1.335, 0.0, 0.0]),
-                202: np.array([-1.335, -1.056, 0.0]),
-                203: np.array([ 0.0,  -1.048, 0.0])}
+        # Define the centers of the markers -- real world coordinates
+        centers = {200: np.array([0.0, 0.0, 0.0]),
+                201: np.array([1.335, 0.0, 0.0]),
+                202: np.array([0, -1.057002, 0.0]),
+                203: np.array([1.3351002, -1.0493502, 0.0])}
 
+        half = self.size_map[200] / 2.0
+        objPoints = []  # list of (4×3) arrays, one per marker
+        ids       = []  # corresponding marker IDs
 
+        for mid, cen in centers.items():
+            cx, cy, cz = cen
+            # define the 4 corners in a consistent order, e.g. TL, TR, BR, BL:
+            corners3d = np.array([
+                [cx - half, cy + half, cz],  # top-left
+                [cx + half, cy + half, cz],  # top-right
+                [cx + half, cy - half, cz],  # bottom-right
+                [cx - half, cy - half, cz],  # bottom-left
+            ], dtype=np.float32)
+            objPoints.append(corners3d)
+            ids.append(mid)
+        objPoints = list(objPoints)
+        ids = np.array(ids, dtype=np.int32)
 
+        # create the custom board - OpenCV 4.x compatibility
+        try:
+            # OpenCV 4.x method
+            board = cv2.aruco.Board(objPoints, self.aruco_dict, ids)
+        except (AttributeError, TypeError):
+            try:
+                # Fallback for older OpenCV versions
+                board = cv2.aruco.Board_create(objPoints, self.aruco_dict, ids)
+            except AttributeError:
+                # Final fallback: Recommend using a grid board
+                print("Warning: Could not create custom ArUco board. Using basic GridBoard instead.")
 
+        return board
 
 
     def detect(self, image):
@@ -100,6 +134,7 @@ class ArucoMarkerDetector:
         # Detect markers
         corners, ids, rejected = self.detector.detectMarkers(gray)
 
+
         # refine the detection
         #corners, ids, rejected = self.detector.refineDetectedMarkers(gray, corners, ids, rejected)
 
@@ -107,7 +142,11 @@ class ArucoMarkerDetector:
 
 
     def vary_parameters(self, data):
-        """Used to vary the parameters of the aruco detector to optimize detection"""
+        """
+        Used to vary the parameters of the aruco detector to optimize detection
+
+        Need to put in a separate file
+        """
 
         # Import here to avoid circular imports
         from processing_capture import Processor

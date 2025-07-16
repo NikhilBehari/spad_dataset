@@ -211,6 +211,8 @@ class Processor:
     def __init__(self, capture, custom_detector=None):
         self.data = capture
         self.aruco_detector = custom_detector or ArucoMarkerDetector()
+        self._cached_detection = None  # Cache to avoid redundant detection
+        self.grayscale = self.get_grayscale()
 
 
     def get_grayscale(self):
@@ -237,25 +239,31 @@ class Processor:
 
     def detect_aruco(self):
         """Detect ArUco markers in the image"""
-        grayscale = self.get_grayscale()
-        if grayscale is None:
+        if self.grayscale is None:
             print("Error: Could not get grayscale image")
             return None, None, None
 
-        corners, ids, rejected = self.aruco_detector.detect(grayscale)
-        print(f'corners: {len(corners) if corners is not None else 0} detected')
-        print(f'ids: {ids}')
-        print(f'rejected: {len(rejected) if rejected is not None else 0}')
-        
-        return corners, ids, rejected
+        # Use cached result if available
+        if self._cached_detection is None:
+            corners, ids, rejected = self.aruco_detector.detect(self.grayscale)
+            self._cached_detection = (corners, ids, rejected)
+            print(f'corners: {len(corners) if corners is not None else 0} detected')
+            print(f'ids: {ids}')
+            print(f'rejected: {len(rejected) if rejected is not None else 0}')
+
+        return self._cached_detection
+
+    def build_board(self):
+        pass
 
     def draw_aruco(self):
         """Draw ArUco markers in the image with outline and center points"""
-        grayscale = self.get_grayscale()
-        if grayscale is None:
+
+        if self.grayscale is None:
             print("Error: Could not get grayscale image for drawing")
             return None
 
+        # Use cached detection (this won't re-run detection)
         corners, ids, _ = self.detect_aruco()
 
         # Check if any markers were found (corners is a list, not None when empty)
@@ -263,7 +271,7 @@ class Processor:
             print(f"Drawing {len(corners)} ArUco markers with outlines and centers")
 
             # Convert grayscale to BGR for colored drawing
-            image_bgr = cv2.cvtColor(grayscale, cv2.COLOR_GRAY2BGR)
+            image_bgr = cv2.cvtColor(self.grayscale, cv2.COLOR_GRAY2BGR)
 
             # Draw detected markers (outline)
             image_bgr = cv2.aruco.drawDetectedMarkers(image_bgr, corners, ids)
@@ -294,33 +302,44 @@ class Processor:
             return image_bgr
         else:
             print(f'No ArUco markers detected - returning original grayscale image')
-            return grayscale
+            return self.grayscale
+
+    def draw_board(self, board):
+        """
+        Draws the ground plane on the rgb image
+
+        Args:
+            board (cv2.aruco.Board): The board to draw
+
+        Returns:
+            image_bgr (np.ndarray): The image with the board drawn on it
+        """
+
+        if self.grayscale is None:
+            print("Error: Could not get grayscale image for drawing")
+            return None
+
+        # Get the rgb image
+        rgb_image = self.get_rgb()
+
+        # Draw the board
+        image_bgr = cv2.cvtColor(rgb_image, cv2.COLOR_BGR2GRAY)
+        image_bgr = cv2.aruco.drawPlanarBoard(image_bgr, board, 1, (0, 0, 255))
+
+        return image_bgr
+
 
     def read_intrinsics(self, path):
         """
-        Read the intrinsics from a file
+        Read the intrinsics from a file - delegates to ArucoMarkerDetector
 
         Args:
             path (str): The path to the intrinsics file
 
         Returns:
             dict: The intrinsics data
-            None if error reading the file
         """
-        try:
-            with open(path, 'r') as f:
-                intrinsics = json.load(f)
-            print(f"✅ Intrinsics file found: {path}")
-            return intrinsics
-        except FileNotFoundError:
-            print(f"❌ Intrinsics file not found: {path}")
-            return None
-        except json.JSONDecodeError:
-            print(f"❌ Error parsing intrinsics file: {path}")
-            return None
-        except:
-            print(f'Issue reading intrinsics file: {path}')
-            return None
+        return self.aruco_detector.read_intrinsics(path)
 
 
     @staticmethod
@@ -379,10 +398,10 @@ def loop_through_captures(data, custom_detector=None):
             if num_markers > max_markers:
                 max_markers = num_markers
 
-            aruco_image = processed.draw_aruco()
-
+            #aruco_image = processed.draw_aruco()
             # Show the image with capture index in window name
-            processed.show_image(aruco_image, f"ArUco Detection - Capture {i}")
+            #processed.show_image(aruco_image, f"ArUco Detection - Capture {i}")
+            board_image = processed.draw_board(processed.aruco_detector.grid_board)
 
             print(f"Capture {i} processed ({num_markers} markers). Press any key to continue to next capture...")
 
