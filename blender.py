@@ -8,6 +8,7 @@ class BlenderEnvironmentBuilder:
     def __init__(self, json_path):
         with open(json_path, 'r') as f:
             self.data = json.load(f)
+        
 
     def apply_rotation(self, obj, rotation_type="euler", **kwargs):
         """
