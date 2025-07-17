@@ -283,7 +283,15 @@ def plot_scene_3d(board, rvec_rel, tvec_rel, axis_length=0.5):
     ax.set_zlim(0, max_range)
 
     plt.tight_layout()
-    plt.show()
+
+    # Add key event handler to close on any key press
+    def on_key(event):
+        plt.close(fig)
+
+    fig.canvas.mpl_connect('key_press_event', on_key)
+
+    print("3D scene plotted. Press any key to close the plot and continue...")
+    plt.show(block=True)
 
 def loop_through_captures(data, custom_detector=None):
 
@@ -360,8 +368,9 @@ def loop_through_captures(data, custom_detector=None):
     combined_image = draw_board(batch_processor, avg_sensor_pose, board_image)
     show_image(combined_image, "Average Board and Sensor")
 
-    rvec_rel, t_rel = reconstruct_scene(avg_board_pose, avg_sensor_pose)
+    rvec_rel, t_rel = localize_sensor(avg_board_pose, avg_sensor_pose)
     plot_scene_3d(batch_processor.build_board(), rvec_rel, t_rel)
+    write_scene_to_json(batch_processor.build_board(), rvec_rel, t_rel, batch_processor.aruco_detector.size_map, "test_scene.json")
 
     return max_markers
 
@@ -443,11 +452,10 @@ def average_poses(rt_list):
 
     return rvec_avg, t_avg
 
-def reconstruct_scene(board_pose, sensor_pose):
+def localize_sensor(board_pose, sensor_pose):
     """
-    Reconstruct the scene
+    Localize the sensor in the board coordinate system
 
-    Will eventually take object pose as well
     """
     # convert to rotation matrices
     Rb, _ = cv2.Rodrigues(board_pose[0])
@@ -460,6 +468,55 @@ def reconstruct_scene(board_pose, sensor_pose):
 
     return rvec_rel, t_rel
 
+def write_scene_to_json(board, rvec_rel, tvec_rel, size_map, filename):
+    """
+    Writes a JSON containing:
+      - ground_plane: the four corner vertices of your board in board‐frame
+      - sensor: position & orientation (as a quaternion) relative to the board origin
+      - marker_sizes: sizes of all ArUco markers
+
+    Args:
+      board      : your cv2.aruco.Board or GridBoard
+      rvec_rel   : (3×1) Rodrigues of sensor in board frame
+      tvec_rel   : (3×1) translation of sensor in board frame
+      size_map   : dict mapping marker IDs to their physical sizes
+      filename   : path to write .json
+    """
+    # 1) extract board corners (Z=0)
+    all_pts = np.vstack(board.getObjPoints()).reshape(-1, 3)
+    x_min, x_max = float(all_pts[:,0].min()), float(all_pts[:,0].max())
+    y_min, y_max = float(all_pts[:,1].min()), float(all_pts[:,1].max())
+    board_corners = [
+        [x_min, y_min, 0.0],
+        [x_min, y_max, 0.0],
+        [x_max, y_max, 0.0],
+        [x_max, y_min, 0.0],
+    ]
+
+    # 2) sensor pose → quaternion
+    # scipy’s as_quat() returns [x, y, z, w]
+    rot = R.from_rotvec(rvec_rel.flatten())
+    q_xyz_w = rot.as_quat()
+    quat = [float(q_xyz_w[3]), float(q_xyz_w[0]), float(q_xyz_w[1]), float(q_xyz_w[2])]
+
+    sensor_pos = tvec_rel.flatten().tolist()
+
+    scene = {
+        "ground_plane": {
+            "corners": board_corners,
+            "normal": [0.0, 0.0, 1.0]        # plane faces +Z in board frame
+        },
+        "sensor": {
+            "position": sensor_pos,         # [x, y, z]
+            "orientation_quat": quat        # [w, x, y, z]
+        },
+        "marker_sizes": size_map        # mapping of marker ID to physical size
+    }
+
+    with open(filename, "w") as f:
+        json.dump(scene, f, indent=2)
+
+    print(f"✅ Wrote scene JSON → {filename}")
 
 # --- Main Execution ---
 if __name__ == "__main__":
