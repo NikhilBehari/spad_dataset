@@ -1,13 +1,55 @@
 import bpy
 import json
 import bmesh
-from mathutils import Vector, Quaternion
+from mathutils import Vector, Quaternion, Matrix
 import math
 
 class BlenderEnvironmentBuilder:
     def __init__(self, json_path):
         with open(json_path, 'r') as f:
             self.data = json.load(f)
+
+    def apply_rotation(self, obj, rotation_type="euler", **kwargs):
+        """
+        Apply rotation to a Blender object using different rotation types.
+
+        Args:
+            obj: Blender object to rotate
+            rotation_type: "euler", "quaternion", "axis_angle", or "yaw_only"
+            **kwargs: rotation parameters based on type
+                - euler: euler=(x, y, z)
+                - quaternion: quat=(w, x, y, z)
+                - axis_angle: angle=float, axis=(x, y, z)
+                - yaw_only: quat=(w, x, y, z) - extracts only yaw component
+        """
+        if rotation_type == "euler":
+            euler = kwargs.get('euler', (0, 0, 0))
+            obj.rotation_mode = 'XYZ'
+            obj.rotation_euler = euler
+
+        elif rotation_type == "quaternion":
+            quat = kwargs.get('quat', (1, 0, 0, 0))
+            obj.rotation_mode = 'QUATERNION'
+            obj.rotation_quaternion = quat
+
+        elif rotation_type == "axis_angle":
+            angle = kwargs.get('angle', 0)
+            axis = kwargs.get('axis', (0, 0, 1))
+            obj.rotation_mode = 'AXIS_ANGLE'
+            obj.rotation_axis_angle = (angle, axis[0], axis[1], axis[2])
+
+        elif rotation_type == "yaw_only":
+            quat = kwargs.get('quat', (1, 0, 0, 0))
+            # Extract only yaw component from quaternion
+            q = Quaternion(quat)
+            q_inv = q.inverted()
+            e = q_inv.to_euler('XYZ')
+            yaw = e.z
+            obj.rotation_mode = 'XYZ'
+            obj.rotation_euler = (0.0, 0.0, yaw)
+
+        else:
+            raise ValueError(f"Unknown rotation_type: {rotation_type}")
 
     def create_ground_plane(self, thickness=0.0508):
         """
@@ -97,15 +139,7 @@ class BlenderEnvironmentBuilder:
         cube.name = "SensorCube"
 
         # Apply orientation: preserve only yaw (rotation about Z)
-        # Build quaternion and invert
-        q = Quaternion(quat)
-        q_inv = q.inverted()
-        # Extract Euler angles in XYZ order: roll (X), pitch (Y), yaw (Z)
-        e = q_inv.to_euler('XYZ')
-        yaw = e.z
-        # Set cube rotation to zero roll/pitch and keep yaw
-        cube.rotation_mode = 'XYZ'
-        cube.rotation_euler = (0.0, 0.0, yaw)
+        self.apply_rotation(cube, "yaw_only", quat=quat)
 
         # Assign a simple bright material so it stands out
         mat = bpy.data.materials.get("SensorMat") or bpy.data.materials.new("SensorMat")
@@ -133,6 +167,41 @@ class BlenderEnvironmentBuilder:
 
         return cube
 
+    def import_and_snap(self, stl_path: str, vert_index: int):
+        """
+        Import an STL, apply yaw-only rotation to match sensor orientation,
+        and snap the specified vertex to the sensor position.
+        """
+        # --- Import STL file ---
+        obj = import_stl(stl_path)
+
+        # --- Apply yaw-only rotation from sensor quaternion ---
+        sensor_quat = self.data["sensor"]["orientation_quat"]
+        self.apply_rotation(obj, "yaw_only", quat=sensor_quat)
+
+        # --- Compute local coordinate of the chosen vertex ---
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        bm.verts.ensure_lookup_table()  # Required for index access
+        vert_co = bm.verts[vert_index].co.copy()
+        bm.free()
+
+        # --- Shift mesh so that vert_co moves to object origin ---
+        translation = Matrix.Translation(-vert_co)
+        obj.data.transform(translation)
+
+        # --- Place object origin at sensor world position ---
+        # Apply same coordinate transformation as sensor cube
+        px, py, pz = self.data["sensor"]["position"]
+        bl_x = -py
+        bl_y = -px
+        bl_z = -pz
+        obj.location = Vector((bl_x, bl_y, bl_z))
+
+        return obj
+
+
+
     def build(self, save_file=False, quit_blender=False):
         # Clear all existing objects from the scene (including default cube)
         bpy.ops.object.select_all(action='SELECT')
@@ -149,18 +218,18 @@ class BlenderEnvironmentBuilder:
         # Create ground plane (try simple method first, fallback to complex)
         # Create ground plane & sensor cube
         plane = self.create_ground_plane()
-        cube  = self.create_sensor_cube()
+        obj = self.import_and_snap("object_mount.stl", 0)
+        #cube  = self.create_sensor_cube()
 
         # Parent both under a root empty so we can flip the entire scene
         root = bpy.data.objects.new("SceneRoot", None)
         bpy.context.collection.objects.link(root)
         plane.parent = root
-        cube.parent  = root
+        obj.parent  = root
 
         # Rotate root: 180° around axis [1, -1, 0] normalized
         axis = (1.0/math.sqrt(2.0), -1.0/math.sqrt(2.0), 0.0)
-        root.rotation_mode        = 'AXIS_ANGLE'
-        root.rotation_axis_angle  = (math.pi, axis[0], axis[1], axis[2])
+        self.apply_rotation(root, "axis_angle", angle=math.pi, axis=axis)
         print("✅ Environment built: ground plane + sensor cube.")
 
         # Save the blend file
@@ -176,6 +245,25 @@ class BlenderEnvironmentBuilder:
         else:
             print("🔄 Blender remains open. Close manually when done.")
 
+@staticmethod
+def import_stl(filepath, name="stl"):
+    # Clear selection first
+    bpy.ops.object.select_all(action='DESELECT')
+
+    # Import STL using the correct operator for Blender 4.3+
+    bpy.ops.wm.stl_import(filepath=filepath)
+
+    # Get the imported object (should be active after import)
+    obj = bpy.context.active_object
+    if obj is None:
+        # Fallback: get the last selected object
+        obj = bpy.context.selected_objects[-1] if bpy.context.selected_objects else None
+
+    if obj is None:
+        raise RuntimeError(f"Failed to import STL file: {filepath}")
+
+    obj.name = name
+    return obj
 
 # Usage:
 # 1. Save this script in Blender’s Text Editor.
@@ -187,6 +275,7 @@ if __name__ == "__main__":
 
     # Option 1: Build scene, save file, keep Blender open (default)
     builder.build(save_file=False, quit_blender=False)
+
 
     # Option 2: Build scene, save file, and quit Blender automatically
     # builder.build(use_simple_plane=True, save_file=True, quit_blender=True)

@@ -6,6 +6,7 @@ out_data_captured/
 *.pkl
 *.json
 *.blend*
+*.stl
 
 # Mac
 .DS_Store
