@@ -5,6 +5,7 @@ librealsense/
 out_data_captured/
 *.pkl
 *.json
+*.blend
 
 # Mac
 .DS_Store
