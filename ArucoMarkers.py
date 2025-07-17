@@ -24,7 +24,7 @@ class ArucoMarkerDetector:
 
         self.ground_plane_ids = {i for i in range(200, 204)}
         self.object_id = 204
-        self.sensor_id = 205
+        self.sensor_id = 100
         self.size_map = {id: ground_marker_size for id in self.ground_plane_ids}
         self.size_map[self.object_id] = object_marker_size
         self.size_map[self.sensor_id] = sensor_marker_size
@@ -41,6 +41,32 @@ class ArucoMarkerDetector:
         ], dtype=np.float32)
 
         self.dist_coeffs = np.array(self.dist_coeffs, dtype=np.float32)
+
+    def load_optimized_parameters(self):
+        """Load optimized ArUco parameters from the best configuration file"""
+        # Look for the best configuration file
+        config_filename = 'best_aruco_params_20250710_224754.json'
+
+        try:
+            # Import here to avoid circular imports
+            from processing_capture import load_aruco_parameters
+
+            # Load the saved parameters
+            params, config = load_aruco_parameters(config_filename)
+
+            if params is not None:
+                # Update the detector with optimized parameters
+                self.parameters = params
+                self.detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.parameters)
+                return True
+            else:
+                print("⚠️  Could not load optimized parameters, using defaults")
+                return False
+
+        except Exception as e:
+            print(f"⚠️  Error loading optimized parameters: {e}")
+            print("⚠️  Using default parameters")
+            return False
 
 
     def read_intrinsics(self, path):
@@ -141,9 +167,26 @@ class ArucoMarkerDetector:
         # Detect markers
         corners, ids, rejected = self.detector.detectMarkers(gray)
 
+        # Refine the detection - this can recover rejected markers and improve accuracy
+        if self.detection_mode == 'grid' and hasattr(self, 'grid_board'):
+            try:
+                # Try the standard signature (may vary by OpenCV version)
+                refined_result = cv2.aruco.refineDetectedMarkers(
+                    gray, self.grid_board, corners, ids, rejected,
+                    self.camera_matrix, self.dist_coeffs, parameters=self.parameters
+                )
 
-        # refine the detection
-        #corners, ids, rejected = self.detector.refineDetectedMarkers(gray, corners, ids, rejected)
+                # Handle different return formats
+                if len(refined_result) == 3:
+                    corners, ids, rejected = refined_result
+                elif len(refined_result) == 4:
+                    corners, ids, rejected, _ = refined_result
+                else:
+                    print(f"Warning: Unexpected refineDetectedMarkers return format: {len(refined_result)} values")
+
+            except Exception as e:
+                print(f"Warning: refineDetectedMarkers failed: {e}")
+                # Continue with original detection results
 
         return corners, ids, rejected
 
@@ -151,7 +194,6 @@ class ArucoMarkerDetector:
         """
         Get the pose of the board
         """
-
 
         # Check if we have detected markers
         if ids is None or len(ids) == 0:
@@ -162,40 +204,16 @@ class ArucoMarkerDetector:
         rvec = np.zeros((3, 1), dtype=np.float32)
         tvec = np.zeros((3, 1), dtype=np.float32)
 
-
         try:
-            print(f"Debug: Analyzing corners structure...")
-            print(f"Debug: corners type: {type(corners)}, length: {len(corners)}")
-
-            # Debug the shape of each corner array
-            for i, corner in enumerate(corners):
-                print(f"Debug: corners[{i}] type: {type(corner)}, shape: {corner.shape}, dtype: {corner.dtype}")
-                print(f"Debug: corners[{i}] sample values: {corner[:2] if len(corner) > 1 else corner}")
-
-            # Debug IDs structure
-            print(f"Debug: ids type: {type(ids)}, shape: {ids.shape}, dtype: {ids.dtype}")
-            print(f"Debug: detected marker IDs: {ids.flatten().tolist()}")
-
-            # Check which board markers are detected
-            detected_ids = set(ids.flatten().tolist())
-            expected_board_ids = self.ground_plane_ids  # {200, 201, 202, 203}
-            missing_ids = expected_board_ids - detected_ids
-
-            print(f"Debug: expected board IDs: {expected_board_ids}")
-            print(f"Debug: detected IDs: {detected_ids}")
-            print(f"Debug: missing board IDs: {missing_ids}")
-
-            # Convert corners to the correct format BEFORE checking for fallback
-            # estimatePoseBoard expects a list of arrays, each with shape (1, 4, 2)
+            # Convert corners to the correct format if needed
             if isinstance(corners, tuple):
                 corners = list(corners)
 
             # Check and fix the shape of each corner array
             fixed_corners = []
-            for i, corner in enumerate(corners):
+            for corner in corners:
                 if corner.shape == (4, 2):  # If it's just (4, 2), need to add the marker dimension
                     fixed_corner = corner.reshape(1, 4, 2)
-
                     fixed_corners.append(fixed_corner)
                 elif corner.shape == (1, 4, 2):  # Already correct shape
                     fixed_corners.append(corner)
@@ -207,48 +225,127 @@ class ArucoMarkerDetector:
                 fixed_ids = ids.reshape(-1, 1)
             else:
                 fixed_ids = ids
+            print(f'{len(fixed_corners)=}')
+            print(f'{len(fixed_ids)=}')
+            print(f'{fixed_ids=}')
+            print(f'{fixed_corners=}')
 
-            # Check if we have enough markers for board pose estimation
-            if len(missing_ids) > 0:
-                print(f"Warning: Missing {len(missing_ids)} board markers: {missing_ids}")
-                print("This might affect board pose estimation accuracy")
-
-                # If we're missing more than 1 marker, board pose estimation is unreliable
-                if len(missing_ids) > 1:
-                    print("Warning: Too many missing markers for reliable board pose estimation")
-                    print("Falling back to individual marker pose estimation")
-
-                    # Use estimatePoseSingleMarkers as fallback
-                    marker_length = .1
-                    rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
-                        fixed_corners, marker_length, self.camera_matrix, self.dist_coeffs)
-
-                    if rvecs is not None and tvecs is not None and len(rvecs) > 0:
-                        # Use the first detected marker as reference
-                        rvec = rvecs[0]
-                        tvec = tvecs[0]
-                        retval = True
-                        print(f"Debug: Using single marker pose as fallback")
-                        return retval, rvec, tvec
-                    else:
-                        print("Error: No valid marker poses estimated")
-                        return False, None, None
-
-            # Try board pose estimation with all detected markers
-            print(f"Debug: Attempting board pose estimation with {len(detected_ids)} markers")
-
+            # Try board pose estimation
             retval, rvec, tvec = cv2.aruco.estimatePoseBoard(
                 fixed_corners, fixed_ids, self.grid_board,
-                self.camera_matrix, self.dist_coeffs,
-                rvec, tvec)
+                self.camera_matrix, self.dist_coeffs, rvec, tvec
+            )
         except Exception as e:
             print(f"Warning: Board pose estimation failed: {e}")
-            print(f"Debug: Exception type: {type(e)}")
-            import traceback
-            traceback.print_exc()
             return False, None, None
 
+        print(f'{retval=}')
+
         return retval, rvec, tvec
+
+    def sensor_pose(self, corners, ids):
+        """
+        Get the pose of a single marker
+        """
+        target_id = self.sensor_id
+        print(f"Debug: Looking for object marker ID {target_id}")
+
+        # Check if we have detected markers
+        if ids is None or len(ids) == 0:
+            print("Warning: No markers detected for single marker pose estimation")
+            return False, None, None
+
+        # flatten to 1D array for easy searching
+        flat_ids = ids.flatten()
+        print(f"Debug: Detected marker IDs: {flat_ids.tolist()}")
+
+        for idx, id_val in enumerate(flat_ids):
+            if id_val == target_id:
+                print(f"Debug: Found object marker {target_id} at index {idx}")
+
+                # corners[idx] is shape (1,4,2) or (4,2)
+                c = corners[idx]
+                print(f"Debug: Corner shape: {c.shape}")
+
+                if c.ndim == 2:        # (4,2) → (1,4,2)
+                    c = c.reshape(1,4,2)
+                    print(f"Debug: Reshaped corners to: {c.shape}")
+
+                try:
+                    print("Debug: Trying estimatePoseSingleMarkers...")
+                    # Try estimatePoseSingleMarkers first
+                    rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
+                        [c], self.size_map[target_id], self.camera_matrix, self.dist_coeffs
+                    )
+
+                    if rvecs is not None and tvecs is not None and len(rvecs) > 0:
+                        print("Debug: estimatePoseSingleMarkers succeeded")
+                        # Handle different possible shapes
+                        rvec = rvecs[0]
+                        tvec = tvecs[0]
+
+                        # Ensure consistent (3,1) shape
+                        if rvec.ndim == 1:
+                            rvec = rvec.reshape(3, 1)
+                        elif rvec.shape == (1, 3):
+                            rvec = rvec.reshape(3, 1)
+
+                        if tvec.ndim == 1:
+                            tvec = tvec.reshape(3, 1)
+                        elif tvec.shape == (1, 3):
+                            tvec = tvec.reshape(3, 1)
+
+                        return True, rvec, tvec
+                    else:
+                        print("Debug: estimatePoseSingleMarkers returned invalid results")
+
+                except AttributeError as e:
+                    print(f"Debug: estimatePoseSingleMarkers not available: {e}")
+                    print("Debug: Trying solvePnP fallback...")
+                    # estimatePoseSingleMarkers doesn't exist, use solvePnP
+                    marker_size = self.size_map[target_id]
+                    half_size = marker_size / 2.0
+
+                    # Define object points for the marker (square centered at origin)
+                    object_points = np.array([
+                        [-half_size, half_size, 0],   # top-left
+                        [half_size, half_size, 0],    # top-right
+                        [half_size, -half_size, 0],   # bottom-right
+                        [-half_size, -half_size, 0]   # bottom-left
+                    ], dtype=np.float32)
+
+                    # Get image points from the marker (shape should be (4, 2))
+                    image_points = c[0] if c.shape == (1, 4, 2) else c
+                    print(f"Debug: Object points shape: {object_points.shape}")
+                    print(f"Debug: Image points shape: {image_points.shape}")
+
+                    # Initialize rotation and translation vectors
+                    rvec = np.zeros((3, 1), dtype=np.float32)
+                    tvec = np.zeros((3, 1), dtype=np.float32)
+
+                    # Use solvePnP to estimate pose
+                    success, rvec, tvec = cv2.solvePnP(
+                        object_points, image_points,
+                        self.camera_matrix, self.dist_coeffs,
+                        rvec, tvec
+                    )
+
+                    print(f"Debug: solvePnP success: {success}")
+                    if success:
+                        print(f"Debug: rvec shape: {rvec.shape}, tvec shape: {tvec.shape}")
+                        return True, rvec, tvec
+                    else:
+                        print("Debug: solvePnP failed")
+
+                except Exception as e:
+                    print(f"Warning: Object pose estimation failed: {e}")
+                    import traceback
+                    traceback.print_exc()
+
+        # marker not detected or pose estimation failed
+        print(f"Debug: Object marker {target_id} not found in detected markers")
+        return False, None, None
+
 
 
     def vary_parameters(self, data):

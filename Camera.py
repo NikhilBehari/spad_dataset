@@ -1,6 +1,7 @@
-import pyrealsense2 as rs
+import cv2
 import numpy as np
 import json
+import matplotlib.pyplot as plt
 
 class CameraManager:
     """
