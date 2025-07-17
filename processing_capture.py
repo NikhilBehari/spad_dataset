@@ -501,6 +501,9 @@ def write_scene_to_json(board, rvec_rel, tvec_rel, size_map, filename):
 
     sensor_pos = tvec_rel.flatten().tolist()
 
+    # Convert size_map to JSON-serializable format
+    marker_sizes = {str(marker_id): float(size) for marker_id, size in size_map.items()}
+
     scene = {
         "ground_plane": {
             "corners": board_corners,
@@ -510,7 +513,7 @@ def write_scene_to_json(board, rvec_rel, tvec_rel, size_map, filename):
             "position": sensor_pos,         # [x, y, z]
             "orientation_quat": quat        # [w, x, y, z]
         },
-        "marker_sizes": size_map        # mapping of marker ID to physical size
+        "marker_sizes": marker_sizes        # mapping of marker ID to physical size
     }
 
     with open(filename, "w") as f:
