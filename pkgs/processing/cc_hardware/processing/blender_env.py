@@ -3,12 +3,13 @@ import json
 import bmesh
 from mathutils import Vector, Quaternion, Matrix
 import math
+from .config import PROCESSING, FILE_PATHS, ARUCO_CONFIG
 
 class BlenderEnvironmentBuilder:
     def __init__(self, json_path):
         with open(json_path, 'r') as f:
             self.data = json.load(f)
-        
+
 
     def apply_rotation(self, obj, rotation_type="euler", **kwargs):
         """
@@ -52,7 +53,9 @@ class BlenderEnvironmentBuilder:
         else:
             raise ValueError(f"Unknown rotation_type: {rotation_type}")
 
-    def create_ground_plane(self, thickness=0.0508):
+    def create_ground_plane(self, thickness=None):
+        if thickness is None:
+            thickness = PROCESSING['ground_plane_thickness']
         """
         Builds a wooden ground plane from corners, extruded downward by `thickness` meters.
         """
@@ -116,57 +119,7 @@ class BlenderEnvironmentBuilder:
         return obj
 
 
-    def create_sensor_cube(self, size=None):
-        """
-        Adds a cube of side `size` at the sensor position with the correct orientation.
-        If size is None, uses the size of marker ID 100 from the JSON data.
-        """
-        pos  = self.data["sensor"]["position"]
-        quat = self.data["sensor"]["orientation_quat"]  # [w,x,y,z]
 
-        # Get size from marker ID 100 if not specified
-        if size is None:
-            marker_sizes = self.data.get("marker_sizes", {})
-            size = float(marker_sizes.get("100", 0.05))  # Default to 0.05 if not found
-            print(f"Using marker 100 size: {size}m")
-
-        # Create cube
-        px, py, pz = pos
-        bl_x = -py
-        bl_y = -px
-        bl_z = -pz
-        bpy.ops.mesh.primitive_cube_add(size=size, location=(bl_x, bl_y, bl_z))
-        cube = bpy.context.active_object
-        cube.name = "SensorCube"
-
-        # Apply orientation: preserve only yaw (rotation about Z)
-        self.apply_rotation(cube, "yaw_only", quat=quat)
-
-        # Assign a simple bright material so it stands out
-        mat = bpy.data.materials.get("SensorMat") or bpy.data.materials.new("SensorMat")
-        mat.use_nodes = True
-
-        # Clear existing nodes and create new ones
-        mat.node_tree.nodes.clear()
-
-        # Create emission shader node
-        emission_node = mat.node_tree.nodes.new(type="ShaderNodeEmission")
-        emission_node.inputs["Color"].default_value = (0.0, 0.6, 1.0, 1.0)  # Bright cyan
-        emission_node.inputs["Strength"].default_value = 2.0
-
-        # Create output node
-        output_node = mat.node_tree.nodes.new(type="ShaderNodeOutputMaterial")
-
-        # Connect emission to output
-        mat.node_tree.links.new(emission_node.outputs["Emission"], output_node.inputs["Surface"])
-
-        # Assign material to cube
-        if not cube.data.materials:
-            cube.data.materials.append(mat)
-        else:
-            cube.data.materials[0] = mat
-
-        return cube
 
     def import_and_snap(self, stl_path: str, vert_index: int):
         """
@@ -210,9 +163,7 @@ class BlenderEnvironmentBuilder:
 
         bpy.ops.object.empty_add(type='ARROWS', location=(0,0,0))
 
-        # Alternative method if the above doesn't work:
-        # for obj in bpy.data.objects:
-        #     bpy.data.objects.remove(obj, do_unlink=True)
+
 
         print("✅ Cleared all existing objects from scene")
 
@@ -220,7 +171,6 @@ class BlenderEnvironmentBuilder:
         # Create ground plane & sensor cube
         plane = self.create_ground_plane()
         obj = self.import_and_snap("object_mount.stl", 0)
-        #cube  = self.create_sensor_cube()
 
         # Parent both under a root empty so we can flip the entire scene
         root = bpy.data.objects.new("SceneRoot", None)
@@ -272,14 +222,12 @@ def import_stl(filepath, name="stl"):
 # 3. Run the script (Alt+P).
 
 if __name__ == "__main__":
-    builder = BlenderEnvironmentBuilder("test_scene.json")
+    builder = BlenderEnvironmentBuilder(FILE_PATHS['scene_output'])
 
     # Option 1: Build scene, save file, keep Blender open (default)
     builder.build(save_file=False, quit_blender=False)
 
 
-    # Option 2: Build scene, save file, and quit Blender automatically
-    # builder.build(use_simple_plane=True, save_file=True, quit_blender=True)
-
-    # Option 3: Build scene but don't save file (for testing)
-    # builder.build(use_simple_plane=True, save_file=False, quit_blender=False)
+    # Other options:
+    # builder.build(save_file=True, quit_blender=True)  # Save and quit
+    # builder.build(save_file=True, quit_blender=False) # Save but stay open

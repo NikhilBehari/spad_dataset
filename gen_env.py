@@ -9,10 +9,11 @@ to create 3D environments from scene data.
 import sys
 sys.path.insert(0, "pkgs/processing")
 from cc_hardware.processing.blender_env import BlenderEnvironmentBuilder
+from cc_hardware.processing import FILE_PATHS
 
 if __name__ == "__main__":
     # Default scene file - change this to your scene JSON file
-    scene_file = "test_scene.json"
+    scene_file = FILE_PATHS['scene_output']
 
     # Filter out Blender-specific arguments and script name
     args = [arg for arg in sys.argv[1:] if not arg.startswith('--') and not arg.endswith('.py')]

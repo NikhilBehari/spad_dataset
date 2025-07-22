@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
 import cv2
+from .utils import show_image
 
 
 class DataManager:

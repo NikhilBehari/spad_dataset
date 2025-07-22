@@ -43,3 +43,15 @@ try:
     __all__.append('BlenderEnvironmentBuilder')
 except ImportError as e:
     print(f"Warning: Could not import BlenderEnvironmentBuilder: {e}")
+
+# Always available - no optional dependencies
+from .config import ARUCO_CONFIG, FILE_PATHS, VISUALIZATION, PROCESSING
+__all__.extend(['ARUCO_CONFIG', 'FILE_PATHS', 'VISUALIZATION', 'PROCESSING'])
+
+# Conditionally import utils (may have optional dependencies)
+try:
+    from .utils import read_intrinsics, show_image, setup_camera_matrix, load_json_config, save_json_config
+    __all__.extend(['read_intrinsics', 'show_image', 'setup_camera_matrix',
+                    'load_json_config', 'save_json_config'])
+except ImportError as e:
+    print(f"Warning: Could not import utils functions: {e}")

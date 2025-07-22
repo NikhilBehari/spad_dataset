@@ -8,6 +8,8 @@ from .aruco_markers import ArucoMarkerDetector
 from .data_manager import DataManager
 from scipy.spatial.transform import Rotation as R
 from mpl_toolkits.mplot3d import Axes3D
+from .config import FILE_PATHS, PROCESSING, VISUALIZATION
+from .utils import show_image
 
 
 def load_aruco_parameters(config_filename):
@@ -130,14 +132,16 @@ class Processor:
                     marker_id = ids[i][0]
                     cv2.putText(image_bgr, f"ID: {marker_id}",
                                (center_x + 15, center_y - 15),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+                               cv2.FONT_HERSHEY_SIMPLEX, VISUALIZATION['font_scale_large'],
+                               VISUALIZATION['marker_id_color'], VISUALIZATION['font_thickness'])
 
                 # Draw corner numbers for debugging
                 for j, point in enumerate(corner_points):
                     pt = (int(point[0]), int(point[1]))
-                    cv2.circle(image_bgr, pt, 3, (255, 0, 0), -1)  # Blue corner points
+                    cv2.circle(image_bgr, pt, 3, VISUALIZATION['corner_color'], -1)  # Corner points
                     cv2.putText(image_bgr, str(j), (pt[0] + 5, pt[1] + 5),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 0), 1)
+                               cv2.FONT_HERSHEY_SIMPLEX, VISUALIZATION['font_scale_small'],
+                               VISUALIZATION['corner_color'], 1)
 
             return image_bgr
         else:
@@ -151,66 +155,24 @@ class Processor:
         """
         Draw the board on the rgb image
         """
-        return cv2.drawFrameAxes(self.get_rgb(), self.aruco_detector.camera_matrix, self.aruco_detector.dist_coeffs, board_pose[1], board_pose[2], 0.1)
+        return cv2.drawFrameAxes(self.get_rgb(), self.aruco_detector.camera_matrix, self.aruco_detector.dist_coeffs, board_pose[1], board_pose[2], VISUALIZATION['frame_axes_length'])
 
 
-    def read_intrinsics(self, path):
-        """
-        Read the intrinsics from a file
-
-        Args:
-            path (str): The path to the intrinsics file
-
-        Returns:
-            dict: The intrinsics data
-            None if error reading the file
-        """
-        try:
-            with open(path, 'r') as f:
-                intrinsics = json.load(f)
-            print(f"✅ Intrinsics file found: {path}")
-            return intrinsics
-        except FileNotFoundError:
-            print(f"❌ Intrinsics file not found: {path}")
-            return None
-        except json.JSONDecodeError:
-            print(f"❌ Error parsing intrinsics file: {path}")
-            return None
-        except:
-            print(f'Issue reading intrinsics file: {path}')
-            return None
 
 
-    @staticmethod
-    def show_image(image, window_name="ArUco Detection"):
-        """Show the image"""
-        if image is None:
-            print("Error: No image to display")
-            return
 
-        cv2.imshow(window_name, image)
-        print("Press any key to close the image window...")
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+
 
 
 
 ######################################
 ########## HELPER FUNCTIONS ##########
 ######################################
-@staticmethod
-def show_image(image, window_name: str):
-        """Show the image"""
-        if image is None:
-            print("Error: No image to display")
-            return
 
-        cv2.imshow(window_name, image)
-        print("Press any key to close the image window...")
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
 
-def plot_scene_3d(board, rvec_rel, tvec_rel, axis_length=0.5):
+def plot_scene_3d(board, rvec_rel, tvec_rel, axis_length=None):
+    if axis_length is None:
+        axis_length = PROCESSING['axis_length']
     """
     Visualize a planar ArUco board and a sensor frame in 3D (in board coordinates),
     plus the vector from the board origin to the sensor origin.
@@ -324,13 +286,7 @@ def loop_through_captures(data, custom_detector=None):
             processed = Processor(selected_capture, custom_detector)
 
             # Get marker count for this capture
-            #corners, ids, rejected = processed.detect_aruco()
             detected_aruco, board_info, sensor_info = process_capture(processed)
-
-
-            print(f'{detected_aruco["corners"]=}')
-            print(f'{type(detected_aruco["corners"])=}')
-            print(f'{type(detected_aruco["corners"][0])=}')
 
             num_markers = len(detected_aruco['corners']) if detected_aruco['corners'] is not None else 0
             all_marker_counts.append(num_markers)
@@ -347,20 +303,16 @@ def loop_through_captures(data, custom_detector=None):
 
             aruco_image = processed.draw_aruco()
             # Show the image with capture index in window name
-            # print(f'{board_pose=}')
 
-            #processed.show_image(board_info['board_image'], f"ArUco Detection - Capture {i}")
-            processed.show_image(aruco_image, f"ArUco Detection - Capture {i}")
+            show_image(aruco_image, f"ArUco Detection - Capture {i}")
 
             print(f"Capture {i} processed ({num_markers} markers). Press any key to continue to next capture...")
 
     print(f"\nAll captures processed!")
     print(f"Marker counts per capture: {all_marker_counts}")
     print(f"Maximum markers detected: {max_markers}")
-    print(f'{len(all_board_poses)=}')
-    print(f'{len(all_sensor_poses)=}')
-    print(f"Board poses: {all_board_poses}")
-    print(f"Sensor poses: {all_sensor_poses}")
+    print(f"Board poses collected: {len(all_board_poses)}")
+    print(f"Sensor poses collected: {len(all_sensor_poses)}")
 
     avg_board_pose, avg_sensor_pose = compute_average_poses(all_board_poses, all_sensor_poses)
     board_image = draw_board(batch_processor, avg_board_pose, batch_processor.get_rgb())
@@ -369,7 +321,7 @@ def loop_through_captures(data, custom_detector=None):
 
     rvec_rel, t_rel = localize_sensor(avg_board_pose, avg_sensor_pose)
     plot_scene_3d(batch_processor.build_board(), rvec_rel, t_rel)
-    write_scene_to_json(batch_processor.build_board(), rvec_rel, t_rel, batch_processor.aruco_detector.size_map, "test_scene.json")
+    write_scene_to_json(batch_processor.build_board(), rvec_rel, t_rel, batch_processor.aruco_detector.size_map, FILE_PATHS['scene_output'])
 
     return max_markers
 
@@ -411,10 +363,8 @@ def process_capture(processor: Processor):
     }
 
     sensor_pose = processor.aruco_detector.sensor_pose(corners, ids)
-    #object_image = processor.draw_board(obj_pose)
     sensor_info = {
         'sensor_pose': sensor_pose,
-        #'object_image': object_image
     }
 
     return detected_aruco, board_info, sensor_info
@@ -424,7 +374,7 @@ def draw_board(processor, pose, image):
     Draw the board on the image
     pose is (avg_rvec, avg_tvec) from average_poses()
     """
-    return cv2.drawFrameAxes(image, processor.aruco_detector.camera_matrix, processor.aruco_detector.dist_coeffs, pose[0], pose[1], 0.1)
+    return cv2.drawFrameAxes(image, processor.aruco_detector.camera_matrix, processor.aruco_detector.dist_coeffs, pose[0], pose[1], VISUALIZATION['frame_axes_length'])
 
 def average_poses(rt_list):
     """
@@ -527,7 +477,7 @@ if __name__ == "__main__":
     # --- Configuration ---
     # IMPORTANT: Replace this with the actual path to your .pkl file
     # Example: PKL_PATH = Path("out_data_captured/2025-06-30/my_object_20250630_0.pkl")
-    PKL_PATH_INPUT = "test_20250709_1.pkl"
+    PKL_PATH_INPUT = FILE_PATHS['default_pkl']
     #PKL_PATH_INPUT = "test_20250703.pkl"
     PKL_PATH = Path(PKL_PATH_INPUT)
 

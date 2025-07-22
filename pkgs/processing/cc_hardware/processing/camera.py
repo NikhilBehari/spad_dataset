@@ -3,6 +3,7 @@ import numpy as np
 import json
 import matplotlib.pyplot as plt
 import pyrealsense2 as rs
+from .config import FILE_PATHS
 
 class CameraManager:
     """
@@ -44,8 +45,9 @@ class CameraManager:
             'distortion_coefficients': list(color_intrinsics.coeffs)
         }
 
-        # Save to JSON file
-        with open('camera_intrinsics.json', 'w') as f:
+        # Save to JSON file using config path
+        filename = FILE_PATHS['camera_intrinsics']
+        with open(filename, 'w') as f:
             json.dump(intrinsics_data, f, indent=2)
 
     def close(self):
@@ -54,5 +56,5 @@ class CameraManager:
 
 if __name__ == "__main__":
     camera = CameraManager()
-    print("Camera intrinsics saved to camera_intrinsics.json")
+    print(f"Camera intrinsics saved to {FILE_PATHS['camera_intrinsics']}")
     camera.close()

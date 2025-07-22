@@ -2,6 +2,8 @@ import cv2
 import numpy as np
 import json
 from datetime import datetime
+from .config import ARUCO_CONFIG, FILE_PATHS, PROCESSING
+from .utils import read_intrinsics, setup_camera_matrix
 
 
 class ArucoMarkerDetector:
@@ -12,40 +14,52 @@ class ArucoMarkerDetector:
     def __init__(self,
                  dictionary_id: int = cv2.aruco.DICT_ARUCO_ORIGINAL,
                  parameters: cv2.aruco.DetectorParameters = None,
-                 detection_mode: str = 'grid',
-                 ground_marker_size: float = .1,
-                 sensor_marker_size: float = 0.08,
-                 object_marker_size: float = 0.08):
+                 detection_mode: str = None,
+                 ground_marker_size: float = None,
+                 sensor_marker_size: float = None,
+                 object_marker_size: float = None):
+
+        # Use config defaults if not specified
+        if detection_mode is None:
+            detection_mode = PROCESSING['detection_mode']
+        if ground_marker_size is None:
+            ground_marker_size = ARUCO_CONFIG['marker_sizes']['ground_marker_size']
+        if sensor_marker_size is None:
+            sensor_marker_size = ARUCO_CONFIG['marker_sizes']['sensor_marker_size']
+        if object_marker_size is None:
+            object_marker_size = ARUCO_CONFIG['marker_sizes']['object_marker_size']
 
         # Setup the detector
         self.aruco_dict = cv2.aruco.getPredefinedDictionary(dictionary_id)
         self.parameters = parameters or cv2.aruco.DetectorParameters()
         self.detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.parameters)
 
-        self.ground_plane_ids = {i for i in range(200, 204)}
-        self.object_id = 204
-        self.sensor_id = 100
-        self.size_map = {id: ground_marker_size for id in self.ground_plane_ids}
-        self.size_map[self.object_id] = object_marker_size
-        self.size_map[self.sensor_id] = sensor_marker_size
+        self.ground_plane_ids = set(ARUCO_CONFIG['ground_plane_ids'])
+        self.object_id = ARUCO_CONFIG['object_id']
+        self.sensor_id = ARUCO_CONFIG['sensor_id']
+
+        # Store the actual size values after setting defaults
+        self.ground_marker_size = ground_marker_size
+        self.object_marker_size = object_marker_size
+        self.sensor_marker_size = sensor_marker_size
+
+        # Now create size_map with properly initialized values
+        self.size_map = {id: self.ground_marker_size for id in self.ground_plane_ids}
+        self.size_map[self.object_id] = self.object_marker_size
+        self.size_map[self.sensor_id] = self.sensor_marker_size
 
         self.detection_mode = detection_mode
 
         if self.detection_mode == 'grid':
             self.grid_board = self.build_board()
-        self.intrinsics, self.camera_matrix, self.dist_coeffs = self.read_intrinsics("camera_intrinsics.json")
-        self.camera_matrix = np.array([
-            [self.camera_matrix['fx'], 0, self.camera_matrix['cx']],
-            [0, self.camera_matrix['fy'], self.camera_matrix['cy']],
-            [0, 0, 1]
-        ], dtype=np.float32)
-
-        self.dist_coeffs = np.array(self.dist_coeffs, dtype=np.float32)
+        self.intrinsics, camera_matrix_dict, self.dist_coeffs = read_intrinsics()
+        self.camera_matrix = setup_camera_matrix(camera_matrix_dict) if camera_matrix_dict else None
+        self.dist_coeffs = np.array(self.dist_coeffs, dtype=np.float32) if self.dist_coeffs else None
 
     def load_optimized_parameters(self):
         """Load optimized ArUco parameters from the best configuration file"""
         # Look for the best configuration file
-        config_filename = 'best_aruco_params_20250710_224754.json'
+        config_filename = FILE_PATHS['optimized_params']
 
         try:
             # Import here to avoid circular imports
@@ -69,31 +83,7 @@ class ArucoMarkerDetector:
             return False
 
 
-    def read_intrinsics(self, path):
-        """
-        Read the intrinsics from a file
 
-        Args:
-            path (str): The path to the intrinsics file
-
-        Returns:
-            tuple: (intrinsics_dict, camera_matrix, distortion_coefficients)
-                   or (None, None, None) if error
-        """
-        try:
-            with open(path, 'r') as f:
-                intrinsics = json.load(f)
-            print(f"✅ Intrinsics file found: {path}")
-            return intrinsics, intrinsics['camera_matrix'], intrinsics['distortion_coefficients']
-        except FileNotFoundError:
-            print(f"❌ Intrinsics file not found: {path}")
-            return None, None, None
-        except json.JSONDecodeError:
-            print(f"❌ Error parsing intrinsics file: {path}")
-            return None, None, None
-        except:
-            print(f'Issue reading intrinsics file: {path}')
-            return None, None, None
 
 
     def build_board(self):
@@ -110,12 +100,17 @@ class ArucoMarkerDetector:
         """
 
         # Define the centers of the markers -- real world coordinates
-        centers = {200: np.array([0.0, 0.0, 0.0]),
-                201: np.array([1.335, 0.0, 0.0]),
-                202: np.array([0, -1.057002, 0.0]),
-                203: np.array([1.3351002, -1.0493502, 0.0])}
+        # Get ground plane IDs from config
+        ground_ids = ARUCO_CONFIG['ground_plane_ids']
+        coords = ARUCO_CONFIG['ground_plane_coordinates']
+        centers = {
+            ground_ids[0]: np.array(coords['marker_0']),
+            ground_ids[1]: np.array(coords['marker_1']),
+            ground_ids[2]: np.array(coords['marker_2']),
+            ground_ids[3]: np.array(coords['marker_3'])
+        }
 
-        half = self.size_map[200] / 2.0
+        half = self.size_map[ground_ids[0]] / 2.0
         objPoints = []  # list of (4×3) arrays, one per marker
         ids       = []  # corresponding marker IDs
 
@@ -229,10 +224,7 @@ class ArucoMarkerDetector:
                 fixed_ids = ids.reshape(-1, 1)
             else:
                 fixed_ids = ids
-            print(f'{len(fixed_corners)=}')
-            print(f'{len(fixed_ids)=}')
-            print(f'{fixed_ids=}')
-            print(f'{fixed_corners=}')
+
 
             # Try board pose estimation with OpenCV version compatibility
             try:
@@ -285,8 +277,6 @@ class ArucoMarkerDetector:
             print(f"Warning: Board pose estimation failed: {e}")
             return False, None, None
 
-        print(f'{retval=}')
-
         return retval, rvec, tvec
 
     def sensor_pose(self, corners, ids):
@@ -294,7 +284,6 @@ class ArucoMarkerDetector:
         Get the pose of a single marker
         """
         target_id = self.sensor_id
-        print(f"Debug: Looking for object marker ID {target_id}")
 
         # Check if we have detected markers
         if ids is None or len(ids) == 0:
@@ -303,29 +292,22 @@ class ArucoMarkerDetector:
 
         # flatten to 1D array for easy searching
         flat_ids = ids.flatten()
-        print(f"Debug: Detected marker IDs: {flat_ids.tolist()}")
 
         for idx, id_val in enumerate(flat_ids):
             if id_val == target_id:
-                print(f"Debug: Found object marker {target_id} at index {idx}")
-
                 # corners[idx] is shape (1,4,2) or (4,2)
                 c = corners[idx]
-                print(f"Debug: Corner shape: {c.shape}")
 
                 if c.ndim == 2:        # (4,2) → (1,4,2)
                     c = c.reshape(1,4,2)
-                    print(f"Debug: Reshaped corners to: {c.shape}")
 
                 try:
-                    print("Debug: Trying estimatePoseSingleMarkers...")
                     # Try estimatePoseSingleMarkers first
                     rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
                         [c], self.size_map[target_id], self.camera_matrix, self.dist_coeffs
                     )
 
                     if rvecs is not None and tvecs is not None and len(rvecs) > 0:
-                        print("Debug: estimatePoseSingleMarkers succeeded")
                         # Handle different possible shapes
                         rvec = rvecs[0]
                         tvec = tvecs[0]
@@ -342,12 +324,8 @@ class ArucoMarkerDetector:
                             tvec = tvec.reshape(3, 1)
 
                         return True, rvec, tvec
-                    else:
-                        print("Debug: estimatePoseSingleMarkers returned invalid results")
 
                 except AttributeError as e:
-                    print(f"Debug: estimatePoseSingleMarkers not available: {e}")
-                    print("Debug: Trying solvePnP fallback...")
                     # estimatePoseSingleMarkers doesn't exist, use solvePnP
                     marker_size = self.size_map[target_id]
                     half_size = marker_size / 2.0
@@ -362,8 +340,6 @@ class ArucoMarkerDetector:
 
                     # Get image points from the marker (shape should be (4, 2))
                     image_points = c[0] if c.shape == (1, 4, 2) else c
-                    print(f"Debug: Object points shape: {object_points.shape}")
-                    print(f"Debug: Image points shape: {image_points.shape}")
 
                     # Initialize rotation and translation vectors
                     rvec = np.zeros((3, 1), dtype=np.float32)
@@ -376,12 +352,8 @@ class ArucoMarkerDetector:
                         rvec, tvec
                     )
 
-                    print(f"Debug: solvePnP success: {success}")
                     if success:
-                        print(f"Debug: rvec shape: {rvec.shape}, tvec shape: {tvec.shape}")
                         return True, rvec, tvec
-                    else:
-                        print("Debug: solvePnP failed")
 
                 except Exception as e:
                     print(f"Warning: Object pose estimation failed: {e}")
@@ -389,7 +361,6 @@ class ArucoMarkerDetector:
                     traceback.print_exc()
 
         # marker not detected or pose estimation failed
-        print(f"Debug: Object marker {target_id} not found in detected markers")
         return False, None, None
 
 
