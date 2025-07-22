@@ -49,7 +49,7 @@ class ArucoMarkerDetector:
 
         try:
             # Import here to avoid circular imports
-            from processing_capture import load_aruco_parameters
+            from .processing_capture import load_aruco_parameters
 
             # Load the saved parameters
             params, config = load_aruco_parameters(config_filename)
@@ -170,19 +170,23 @@ class ArucoMarkerDetector:
         # Refine the detection - this can recover rejected markers and improve accuracy
         if self.detection_mode == 'grid' and hasattr(self, 'grid_board'):
             try:
-                # Try the standard signature (may vary by OpenCV version)
-                refined_result = cv2.aruco.refineDetectedMarkers(
-                    gray, self.grid_board, corners, ids, rejected,
-                    self.camera_matrix, self.dist_coeffs, parameters=self.parameters
-                )
+                # Check if refineDetectedMarkers is available
+                if hasattr(cv2.aruco, 'refineDetectedMarkers'):
+                    # Try the standard signature (may vary by OpenCV version)
+                    refined_result = cv2.aruco.refineDetectedMarkers(
+                        gray, self.grid_board, corners, ids, rejected,
+                        self.camera_matrix, self.dist_coeffs, parameters=self.parameters
+                    )
 
-                # Handle different return formats
-                if len(refined_result) == 3:
-                    corners, ids, rejected = refined_result
-                elif len(refined_result) == 4:
-                    corners, ids, rejected, _ = refined_result
+                    # Handle different return formats
+                    if len(refined_result) == 3:
+                        corners, ids, rejected = refined_result
+                    elif len(refined_result) == 4:
+                        corners, ids, rejected, _ = refined_result
+                    else:
+                        print(f"Warning: Unexpected refineDetectedMarkers return format: {len(refined_result)} values")
                 else:
-                    print(f"Warning: Unexpected refineDetectedMarkers return format: {len(refined_result)} values")
+                    print("Note: refineDetectedMarkers not available in this OpenCV version, skipping refinement")
 
             except Exception as e:
                 print(f"Warning: refineDetectedMarkers failed: {e}")
@@ -230,11 +234,53 @@ class ArucoMarkerDetector:
             print(f'{fixed_ids=}')
             print(f'{fixed_corners=}')
 
-            # Try board pose estimation
-            retval, rvec, tvec = cv2.aruco.estimatePoseBoard(
-                fixed_corners, fixed_ids, self.grid_board,
-                self.camera_matrix, self.dist_coeffs, rvec, tvec
-            )
+            # Try board pose estimation with OpenCV version compatibility
+            try:
+                # Try the newer OpenCV 4.x API
+                retval, rvec, tvec = cv2.aruco.estimatePoseBoard(
+                    fixed_corners, fixed_ids, self.grid_board,
+                    self.camera_matrix, self.dist_coeffs, rvec, tvec
+                )
+            except AttributeError:
+                # Fallback: try direct function call (OpenCV 4.5+)
+                try:
+                    retval, rvec, tvec = cv2.aruco.estimatePoseBoard(
+                        fixed_corners, fixed_ids, self.grid_board,
+                        self.camera_matrix, self.dist_coeffs
+                    )
+                except (AttributeError, TypeError):
+                    # Final fallback: use solvePnP with board object points
+                    print("Warning: estimatePoseBoard not available, using solvePnP fallback")
+
+                    # Get object points from the board
+                    obj_points = self.grid_board.getObjPoints()
+
+                    # Filter object points to match detected markers
+                    board_ids = self.grid_board.getIds().flatten()
+                    detected_ids = fixed_ids.flatten()
+
+                    # Find matching points
+                    matched_obj_points = []
+                    matched_img_points = []
+
+                    for i, detected_id in enumerate(detected_ids):
+                        if detected_id in board_ids:
+                            board_idx = np.where(board_ids == detected_id)[0][0]
+                            matched_obj_points.append(obj_points[board_idx])
+                            matched_img_points.append(fixed_corners[i][0])
+
+                    if len(matched_obj_points) >= 4:
+                        all_obj_points = np.vstack(matched_obj_points)
+                        all_img_points = np.vstack(matched_img_points)
+
+                        retval, rvec, tvec = cv2.solvePnP(
+                            all_obj_points, all_img_points,
+                            self.camera_matrix, self.dist_coeffs,
+                            rvec, tvec
+                        )
+                    else:
+                        print("Warning: Not enough matched points for pose estimation")
+                        retval = False
         except Exception as e:
             print(f"Warning: Board pose estimation failed: {e}")
             return False, None, None
@@ -356,7 +402,7 @@ class ArucoMarkerDetector:
         """
 
         # Import here to avoid circular imports
-        from processing_capture import Processor
+        from .processing_capture import Processor
 
         # Get a sample capture to test with
         if not data.data_entries:
@@ -685,7 +731,7 @@ detector = ArucoMarkerDetector(cv2.aruco.DICT_ARUCO_ORIGINAL, params)
         """Used to determine which dictionaries the Aruco Markers are from"""
 
         # Import here to avoid circular imports
-        from processing_capture import Processor
+        from .processing_capture import Processor
 
         # Get a sample capture to test with
         if not data.data_entries:

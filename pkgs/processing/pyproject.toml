@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "cc-hardware-processing"
+version = "0.1.0"
+description = "ArUco marker detection and scene processing for CC Hardware"
+authors = ["CC Hardware Team"]
+readme = "README.md"
+packages = [{include = "cc_hardware"}]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+opencv-python = "^4.0.0"
+numpy = "^1.20.0"
+matplotlib = "^3.3.0"
+scipy = "^1.7.0"
+# pyrealsense2 = "^2.50.0"  # Commented out - install separately if needed
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.0.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

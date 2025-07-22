@@ -1,12 +1,11 @@
-import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 import cv2
 import json
 from datetime import datetime
-from ArucoMarkers import ArucoMarkerDetector
-from data_manager import DataManager
+from .aruco_markers import ArucoMarkerDetector
+from .data_manager import DataManager
 from scipy.spatial.transform import Rotation as R
 from mpl_toolkits.mplot3d import Axes3D
 
@@ -329,9 +328,9 @@ def loop_through_captures(data, custom_detector=None):
             detected_aruco, board_info, sensor_info = process_capture(processed)
 
 
-            print(f'{detected_aruco['corners']=}')
-            print(f'{type(detected_aruco['corners'])=}')
-            print(f'{type(detected_aruco['corners'][0])=}')
+            print(f'{detected_aruco["corners"]=}')
+            print(f'{type(detected_aruco["corners"])=}')
+            print(f'{type(detected_aruco["corners"][0])=}')
 
             num_markers = len(detected_aruco['corners']) if detected_aruco['corners'] is not None else 0
             all_marker_counts.append(num_markers)
@@ -476,16 +475,17 @@ def write_scene_to_json(board, rvec_rel, tvec_rel, size_map, filename):
       - marker_sizes: sizes of all ArUco markers
 
     Args:
-      board      : your cv2.aruco.Board or GridBoard
+      board      : cv2.aruco.Board or GridBoard
       rvec_rel   : (3×1) Rodrigues of sensor in board frame
       tvec_rel   : (3×1) translation of sensor in board frame
       size_map   : dict mapping marker IDs to their physical sizes
       filename   : path to write .json
     """
+
     # 1) extract board corners (Z=0)
     all_pts = np.vstack(board.getObjPoints()).reshape(-1, 3)
-    x_min, x_max = float(all_pts[:,0].min()), float(all_pts[:,0].max())
-    y_min, y_max = float(all_pts[:,1].min()), float(all_pts[:,1].max())
+    x_min, x_max = float(all_pts[:, 0].min()), float(all_pts[:, 0].max())
+    y_min, y_max = float(all_pts[:, 1].min()), float(all_pts[:, 1].max())
     board_corners = [
         [x_min, y_min, 0.0],
         [x_min, y_max, 0.0],
