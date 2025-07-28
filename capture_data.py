@@ -40,7 +40,6 @@ SENSOR_CONFIG = "TMF8828Config"
 DEFAULT_X_SAMPLES = 10
 DEFAULT_Y_SAMPLES = 10
 
-
 # Map specific descriptions to spad + gantry port 
 GANTRY_DESC = "USB-SERIAL CH340"
 SENSOR_DESC = "USB Serial Device"
@@ -52,6 +51,12 @@ for port in serial.tools.list_ports.comports():
     elif SENSOR_DESC in port.description:
         SENSOR_PORT = port.device
 print("GANTRY PORT: ", GANTRY_PORT, "    SPAD PORT: ", SENSOR_PORT)
+
+if SENSOR_PORT is None:
+    print("Continue code without sensor port? \033[1;31mRunning without sensor connected will save RGB images but no histogram data will be saved.\033[0m (y/n): ")
+    choice = input().strip().lower()
+    if choice != 'y':
+        sys.exit("Operation cancelled by user.")
 
 NOW = datetime.now()
 LOG_BASE_DIR = Path("out_data_captured")
@@ -70,15 +75,25 @@ def setup(
 ):
     logdir.mkdir(parents=True, exist_ok=True)
 
-    spad = SPADSensor.create_from_config(sensor)
-    if not spad.is_okay:
-        get_logger().fatal("Failed to initialize spad")
-        return
-    manager.add(spad=spad)
+    if SENSOR_PORT is None:
+        # spad = SPADSensor.create_from_config(sensor)
+        # if not spad.is_okay:
+        #     get_logger().fatal("Failed to initialize spad")
+        #     return
+        manager.add(spad=None)
+    else: 
+        spad = SPADSensor.create_from_config(sensor)
+        if not spad.is_okay:
+            get_logger().fatal("Failed to initialize spad")
+            return
+        manager.add(spad=spad)
 
-    dashboard = SPADDashboard.create_from_config(dashboard, sensor=spad)
-    dashboard.setup()
-    manager.add(dashboard=dashboard)
+    if SENSOR_PORT is None:
+        manager.add(dashboard=None)
+    else: 
+        dashboard = SPADDashboard.create_from_config(dashboard, sensor=spad)
+        dashboard.setup()
+        manager.add(dashboard=dashboard)
 
     gantry_controller = SnakeStepperController(
         [
@@ -168,8 +183,11 @@ def loop(
 ) -> bool:
     get_logger().info(f"Starting iter {iter}...")
 
-    histogram = spad.accumulate()
-    dashboard.update(iter, histograms=histogram)
+    if SENSOR_PORT is None:
+        histogram = None 
+    else:
+        histogram = spad.accumulate()
+        dashboard.update(iter, histograms=histogram)
 
     pos = controller.get_position(iter)
     if pos is None:
