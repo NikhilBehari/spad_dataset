@@ -1,82 +1,187 @@
+#!/usr/bin/env python3
+
+import os
+os.environ["HYDRA_HYDRA_LOGGING__FILE"] = "false"
+os.environ["HYDRA_JOB_LOGGING__FILE"] = "false"
+
+import time
 from datetime import datetime
+from functools import partial
 from pathlib import Path
+from typing import Tuple
 
 from cc_hardware.drivers.spads import SPADSensor, SPADSensorConfig
 from cc_hardware.tools.dashboard import SPADDashboard, SPADDashboardConfig
-from cc_hardware.utils import Manager, get_logger, register_cli, run_cli
+from cc_hardware.utils import get_logger, register_cli, run_cli
 from cc_hardware.utils.file_handlers import PklHandler
+from cc_hardware.utils.manager import Manager
+
+import sys
+try:
+    import pyrealsense2 as rs
+    import numpy as np
+    REALSENSE_AVAILABLE = True
+except ImportError:
+    REALSENSE_AVAILABLE = False
 
 NOW = datetime.now()
 
 
-@register_cli
-def spad_dashboard(
+def setup(
+    manager: Manager,
+    *,
     sensor: SPADSensorConfig,
     dashboard: SPADDashboardConfig,
-    save_data: bool = True,
-    filename: Path | None = None,
-    logdir: Path = Path("logs") / NOW.strftime("%Y-%m-%d"),
+    logdir: Path,
+    object: str,
+    spad_position: Tuple[float, float, float],
+    use_realsense: bool = False,
 ):
-    """Sets up and runs the SPAD dashboard.
+    logdir.mkdir(parents=True, exist_ok=True)
 
-    Args:
-        sensor (SPADSensorConfig): Configuration object for the sensor.
-        dashboard (SPADDashboardConfig): Configuration object for the dashboard.
-    """
+    spad = SPADSensor.create_from_config(sensor)
+    if not spad.is_okay:
+        get_logger().fatal("Failed to initialize SPAD sensor")
+        return
+    manager.add(spad=spad)
 
-    def setup(manager: Manager):
-        if save_data:
-            assert filename is not None, "Filename must be provided if saving data."
-            assert (
-                logdir / filename
-            ).suffix == ".pkl", "Filename must have .pkl extension."
-            assert not (
-                logdir / filename
-            ).exists(), "File already exists. Please provide a new filename."
-            logdir.mkdir(exist_ok=True, parents=True)
-            manager.add(writer=PklHandler(logdir / filename))
+    dashboard = SPADDashboard.create_from_config(dashboard, sensor=spad)
+    dashboard.setup()
+    manager.add(dashboard=dashboard)
 
-        _sensor: SPADSensor = SPADSensor.create_from_config(sensor)
-        manager.add(sensor=_sensor)
+    output_pkl = logdir / f"{object}_data.pkl"
+    assert not output_pkl.exists(), f"Output file {output_pkl} already exists"
+    pkl_writer = PklHandler(output_pkl)
+    manager.add(writer=pkl_writer)
 
-        _dashboard: SPADDashboard = dashboard.create_from_registry(
-            config=dashboard, sensor=_sensor
-        )
-        _dashboard.setup()
-        manager.add(dashboard=_dashboard)
+    metadata = {
+        "object": object,
+        "spad_position": {
+            "x": spad_position[0],
+            "y": spad_position[1],
+            "z": spad_position[2],
+        },
+        "start_time": NOW.isoformat(),
+    }
 
-    def loop(
-        frame: int,
-        manager: Manager,
-        sensor: SPADSensor,
-        dashboard: SPADDashboard,
-        writer: PklHandler | None = None,
-    ):
-        """Updates dashboard each frame.
+    if use_realsense and REALSENSE_AVAILABLE:
+        # RealSense initialization
+        realsense_pipeline = rs.pipeline()
+        realsense_config = rs.config()
+        realsense_config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+        realsense_config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+        profile = realsense_pipeline.start(realsense_config)
+        align = rs.align(rs.stream.color)
 
-        Args:
-            frame (int): Current frame number.
-            manager (Manager): Manager controlling the loop.
-            sensor (SPADSensor): Sensor instance (unused here).
-            dashboard (SPADDashboard): Dashboard instance to update.
-        """
-        get_logger().info(f"Starting iter {frame}...")
+        depth_profile = profile.get_stream(rs.stream.depth).as_video_stream_profile()
+        color_profile = profile.get_stream(rs.stream.color).as_video_stream_profile()
+        depth_intrinsics = depth_profile.get_intrinsics()
+        color_intrinsics = color_profile.get_intrinsics()
 
-        histograms = sensor.accumulate()
-        dashboard.update(frame, histograms=histograms)
+        manager.add(realsense_pipeline=realsense_pipeline)
+        manager.add(realsense_align=align)
 
-        if save_data:
-            assert writer is not None
-            writer.append(
-                {
-                    "iter": iter,
-                    "histogram": histograms,
-                }
-            )
+        metadata["realsense_config"] = {
+            "color_width": 640,
+            "color_height": 480,
+            "depth_width": 640,
+            "depth_height": 480,
+            "fps": 30,
+        }
+        metadata["realsense_intrinsics"] = {
+            "depth": {
+                "ppx": depth_intrinsics.ppx,
+                "ppy": depth_intrinsics.ppy,
+                "fx": depth_intrinsics.fx,
+                "fy": depth_intrinsics.fy,
+                "model": str(depth_intrinsics.model),
+                "coeffs": depth_intrinsics.coeffs,
+            },
+            "color": {
+                "ppx": color_intrinsics.ppx,
+                "ppy": color_intrinsics.ppy,
+                "fx": color_intrinsics.fx,
+                "fy": color_intrinsics.fy,
+                "model": str(color_intrinsics.model),
+                "coeffs": color_intrinsics.coeffs,
+            },
+        }
+
+    pkl_writer.append({"metadata": metadata})
+
+
+def loop(
+    iter: int,
+    manager: Manager,
+    spad: SPADSensor,
+    dashboard: SPADDashboard,
+    writer: PklHandler,
+    use_realsense: bool = False,
+    **kwargs,
+) -> bool:
+    get_logger().info(f"Starting iter {iter}...")
+
+    histogram = spad.accumulate()
+    dashboard.update(iter, histograms=histogram)
+
+    data = {
+        "iter": iter,
+        "histogram": histogram,
+    }
+
+    if use_realsense and REALSENSE_AVAILABLE:
+        pipeline = manager.components["realsense_pipeline"]
+        align = manager.components["realsense_align"]
+
+        frames = pipeline.wait_for_frames()
+        aligned_frames = align.process(frames)
+        depth_frame = aligned_frames.get_depth_frame()
+        color_frame = aligned_frames.get_color_frame()
+
+        depth_image = np.asanyarray(depth_frame.get_data())
+        color_image = np.asanyarray(color_frame.get_data())
+
+        data["realsense_data"] = {
+            "aligned_rgb_image": color_image,
+            "aligned_depth_image": depth_image,
+        }
+
+        time.sleep(0.5)  # longer delay with RGBD
+    else:
+        time.sleep(0.25)
+
+    writer.append(data)
+
+    return True
+
+
+@register_cli
+def spad_capture(
+    sensor: SPADSensorConfig,
+    dashboard: SPADDashboardConfig,
+    object: str,
+    spad_position: Tuple[float, float, float],
+    logdir: Path = Path("logs") / NOW.strftime("%Y-%m-%d") / NOW.strftime("%H-%M-%S"),
+    use_realsense: bool = False,
+):
+    _setup = partial(
+        setup,
+        sensor=sensor,
+        dashboard=dashboard,
+        logdir=logdir,
+        object=object,
+        spad_position=spad_position,
+        use_realsense=use_realsense,
+    )
 
     with Manager() as manager:
-        manager.run(setup=setup, loop=loop)
+        manager.run(setup=_setup, loop=partial(loop, use_realsense=use_realsense))
+
+        print(
+            f"\033[1;32mPKL file saved to "
+            f"{(logdir / f'{object}_data.pkl').resolve()}\033[0m"
+        )
 
 
 if __name__ == "__main__":
-    run_cli(spad_dashboard)
+    run_cli(spad_capture)
