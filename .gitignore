@@ -3,6 +3,8 @@ logs/
 outputs/
 librealsense/
 out_data_captured/
+data/
+.idea/
 *.pkl
 *.json
 *.blend*
